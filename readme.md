@@ -3,3 +3,4 @@
 ### Participantes
 - Humberto Filho Castello Branco Lages Rebello e Castro
 - Álvaro Souza
+- Gabriel Kenji Nakahara Rocha
