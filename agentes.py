@@ -33,7 +33,8 @@ class AgenteTabular:
         self.rewards_per_episode   = []
         self.timesteps_per_episode = []
         self.epsilon_per_episode   = []
-        self.state_visits = np.zeros(env.observation_space.n, dtype=np.int64)
+        # quantas vezes cada ação foi executada em cada estado durante o treino
+        self.visits = np.zeros([env.observation_space.n, env.action_space.n], dtype=np.int64)
 
     def select_action(self, state):
         if self.rng.random() < self.epsilon:
@@ -44,7 +45,12 @@ class AgenteTabular:
         """Roda um episódio atualizando a Q-table e devolve (reward, timesteps)."""
         raise NotImplementedError
 
-    def train(self, filename=None, plotFile=None, rewardFile=None, timestepFile=None, log_every=2500):
+    def train(self, filename=None, plotFile=None, rewardFile=None, timestepFile=None, log_every=2500, callback=None):
+        """Treina por self.episodes episódios.
+
+        callback(episodio, agente), se passado, é chamado no fim de cada
+        episódio (antes do decaimento do ε) e não interfere no treino.
+        """
         for i in range(1, self.episodes + 1):
             # só o primeiro reset recebe a seed; os seguintes continuam a mesma
             # sequência aleatória, então o treino inteiro é reproduzível
@@ -59,6 +65,9 @@ class AgenteTabular:
                 avg = np.mean(self.rewards_per_episode[-100:])
                 print(f"Episódio: {i}/{self.episodes} | ε={self.epsilon:.4f} | "
                       f"reward médio (últimos 100): {avg:.2f}")
+
+            if callback is not None:
+                callback(i, self)
 
             if self.epsilon > self.epsilon_min:
                 self.epsilon = self.epsilon * self.epsilon_dec
@@ -110,7 +119,7 @@ class QLearning(AgenteTabular):
         while not done:
             action = self.select_action(state)
             next_state, reward, done, _, _ = self.env.step(action)
-            self.state_visits[state] += 1
+            self.visits[state, action] += 1
 
             next_max = np.max(self.q_table[next_state]) * (not done)
             old_value = self.q_table[state, action]
@@ -130,7 +139,7 @@ class Sarsa(AgenteTabular):
         action = self.select_action(state)
         while not done:
             next_state, reward, done, _, _ = self.env.step(action)
-            self.state_visits[state] += 1
+            self.visits[state, action] += 1
 
             next_action = self.select_action(next_state)
             next_value = self.q_table[next_state, next_action] * (not done)
@@ -152,7 +161,7 @@ class ExpectedSarsa(AgenteTabular):
         while not done:
             action = self.select_action(state)
             next_state, reward, done, _, _ = self.env.step(action)
-            self.state_visits[state] += 1
+            self.visits[state, action] += 1
 
             q_next = self.q_table[next_state]
             probs = np.full(n_actions, self.epsilon / n_actions)
@@ -167,38 +176,42 @@ class ExpectedSarsa(AgenteTabular):
         return rewards, timesteps
 
 
-def avaliar(pasta, prefixo, n_eval=100, max_steps=200, n_runs=5, **env_kwargs):
-    """Avalia as Q-tables salvas usando só a política gulosa (sem exploração).
+def avaliar_q_table(q_table, n_eval=100, max_steps=200, **env_kwargs):
+    """Testa uma Q-table usando só a política gulosa (sem exploração).
 
-    Todas as Q-tables são testadas nos mesmos episódios (seed = número do
-    episódio), então a comparação entre agentes é justa. Episódios que passam
-    de max_steps são contados em 'Não terminou'.
+    O episódio ep sempre usa seed=ep, então Q-tables diferentes são testadas
+    nos mesmos episódios. Episódios que passam de max_steps são contados em
+    'Não terminou'.
     """
+    env = criar_env(**env_kwargs)
+    passos, rewards, pens, nao_terminou = [], [], [], 0
+
+    for ep in range(n_eval):
+        state, _ = env.reset(seed=ep)
+        done, steps, ep_reward, pen = False, 0, 0, 0
+        while not done and steps < max_steps:
+            state, reward, done, _, _ = env.step(np.argmax(q_table[state]))
+            steps += 1
+            ep_reward += reward
+            pen += (reward == -10)
+        nao_terminou += (not done)
+        passos.append(steps); rewards.append(ep_reward); pens.append(pen)
+
+    env.close()
+    return {'Timesteps (média)': np.mean(passos),
+            'Desvio padrão': np.std(passos),
+            'Mín': float(np.min(passos)), 'Máx': float(np.max(passos)),
+            'Reward médio': np.mean(rewards),
+            'Penalidades': np.mean(pens),
+            'Não terminou': float(nao_terminou)}
+
+
+def avaliar(pasta, prefixo, n_eval=100, max_steps=200, n_runs=5, **env_kwargs):
+    """Avalia as Q-tables salvas em pasta (uma por execução) com avaliar_q_table."""
     linhas = []
     for run in range(1, n_runs + 1):
         q_table = np.loadtxt(f'{pasta}/q-table-taxi-driver-{prefixo}-run{run}.csv', delimiter=',')
-        env = criar_env(**env_kwargs)
-        passos, rewards, pens, nao_terminou = [], [], [], 0
-
-        for ep in range(n_eval):
-            state, _ = env.reset(seed=ep)
-            done, steps, ep_reward, pen = False, 0, 0, 0
-            while not done and steps < max_steps:
-                state, reward, done, _, _ = env.step(np.argmax(q_table[state]))
-                steps += 1
-                ep_reward += reward
-                pen += (reward == -10)
-            nao_terminou += (not done)
-            passos.append(steps); rewards.append(ep_reward); pens.append(pen)
-
-        env.close()
-        linhas.append({'Execução': str(run),
-                       'Timesteps (média)': np.mean(passos),
-                       'Desvio padrão': np.std(passos),
-                       'Mín': float(np.min(passos)), 'Máx': float(np.max(passos)),
-                       'Reward médio': np.mean(rewards),
-                       'Penalidades': np.mean(pens),
-                       'Não terminou': float(nao_terminou)})
+        linhas.append({'Execução': str(run), **avaliar_q_table(q_table, n_eval, max_steps, **env_kwargs)})
 
     df = pd.DataFrame(linhas)
     media = df.drop(columns='Execução').mean()
