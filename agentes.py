@@ -1,9 +1,8 @@
-"""Agentes tabulares (Q-learning, Sarsa e Expected Sarsa) usados nos notebooks.
+"""Q-learning e Sarsa usados nos notebooks do projeto.
 
-Todos compartilham a mesma estrutura: Q-table iniciada com zeros, política
-ε-greedy com decaimento do ε a cada episódio e registro do reward e do número
-de passos de cada episódio. A diferença entre eles está só no alvo da
-atualização da Q-table.
+Os dois agentes funcionam do mesmo jeito: têm uma Q-table começando em zero,
+escolhem ações com ε-greedy e diminuem o ε a cada episódio. A única diferença
+é a fórmula que atualiza a Q-table.
 """
 import numpy as np
 import pandas as pd
@@ -13,11 +12,13 @@ from numpy import savetxt
 
 
 def criar_env(**env_kwargs):
-    # .env remove o TimeLimit: no treino o episódio só termina na entrega
+    # .env tira o limite de 200 passos: no treino o episódio só acaba na entrega
     return gym.make("Taxi-v4", render_mode='ansi', **env_kwargs).env
 
 
-class AgenteTabular:
+class Agente:
+    """Parte comum do Q-learning e do Sarsa."""
+
     def __init__(self, env, alpha, gamma, epsilon, epsilon_min, epsilon_dec, episodes, seed=None):
         self.env = env
         self.q_table = np.zeros([env.observation_space.n, env.action_space.n])
@@ -27,35 +28,23 @@ class AgenteTabular:
         self.epsilon_min = epsilon_min
         self.epsilon_dec = epsilon_dec
         self.episodes = episodes
+        # com a mesma seed, o treino sorteia sempre os mesmos números
         self.seed = seed
         self.rng = np.random.default_rng(seed)
 
         self.rewards_per_episode   = []
         self.timesteps_per_episode = []
-        self.epsilon_per_episode   = []
-        # quantas vezes cada ação foi executada em cada estado durante o treino
-        self.visits = np.zeros([env.observation_space.n, env.action_space.n], dtype=np.int64)
 
     def select_action(self, state):
+        # ε-greedy: com chance ε explora (ação aleatória), senão usa a melhor ação da Q-table
         if self.rng.random() < self.epsilon:
             return int(self.rng.integers(self.env.action_space.n))
         return int(np.argmax(self.q_table[state]))
 
-    def run_episode(self, state):
-        """Roda um episódio atualizando a Q-table e devolve (reward, timesteps)."""
-        raise NotImplementedError
-
-    def train(self, filename=None, plotFile=None, rewardFile=None, timestepFile=None, log_every=2500, callback=None):
-        """Treina por self.episodes episódios.
-
-        callback(episodio, agente), se passado, é chamado no fim de cada
-        episódio (antes do decaimento do ε) e não interfere no treino.
-        """
+    def train(self, filename=None, plotFile=None, rewardFile=None, timestepFile=None, log_every=2500):
         for i in range(1, self.episodes + 1):
-            # só o primeiro reset recebe a seed; os seguintes continuam a mesma
-            # sequência aleatória, então o treino inteiro é reproduzível
+            # só o primeiro episódio recebe a seed; os outros continuam a mesma sequência
             (state, _) = self.env.reset(seed=self.seed if i == 1 else None)
-            self.epsilon_per_episode.append(self.epsilon)
 
             rewards, timesteps = self.run_episode(state)
             self.timesteps_per_episode.append(timesteps)
@@ -65,9 +54,6 @@ class AgenteTabular:
                 avg = np.mean(self.rewards_per_episode[-100:])
                 print(f"Episódio: {i}/{self.episodes} | ε={self.epsilon:.4f} | "
                       f"reward médio (últimos 100): {avg:.2f}")
-
-            if callback is not None:
-                callback(i, self)
 
             if self.epsilon > self.epsilon_min:
                 self.epsilon = self.epsilon * self.epsilon_dec
@@ -111,17 +97,16 @@ class AgenteTabular:
         plt.close()
 
 
-class QLearning(AgenteTabular):
-    """Off-policy: o alvo usa a melhor ação do próximo estado."""
-
+class QLearning(Agente):
     def run_episode(self, state):
         rewards, timesteps, done = 0, 0, False
         while not done:
             action = self.select_action(state)
             next_state, reward, done, _, _ = self.env.step(action)
-            self.visits[state, action] += 1
 
-            next_max = np.max(self.q_table[next_state]) * (not done)
+            # Q(s,a) = Q(s,a) + α * (r + γ * max Q(s',a') - Q(s,a))
+            # usa a MELHOR ação do próximo estado, mesmo que o agente não vá fazê-la
+            next_max = np.max(self.q_table[next_state]) * (not done)  # depois da entrega não há futuro
             old_value = self.q_table[state, action]
             self.q_table[state, action] = old_value + self.alpha * (reward + self.gamma * next_max - old_value)
 
@@ -131,18 +116,17 @@ class QLearning(AgenteTabular):
         return rewards, timesteps
 
 
-class Sarsa(AgenteTabular):
-    """On-policy: o alvo usa a ação que o agente realmente vai executar."""
-
+class Sarsa(Agente):
     def run_episode(self, state):
         rewards, timesteps, done = 0, 0, False
         action = self.select_action(state)
         while not done:
             next_state, reward, done, _, _ = self.env.step(action)
-            self.visits[state, action] += 1
 
+            # Q(s,a) = Q(s,a) + α * (r + γ * Q(s',a') - Q(s,a))
+            # usa a ação a' que o agente REALMENTE vai fazer (pode ser aleatória)
             next_action = self.select_action(next_state)
-            next_value = self.q_table[next_state, next_action] * (not done)
+            next_value = self.q_table[next_state, next_action] * (not done)  # depois da entrega não há futuro
             old_value = self.q_table[state, action]
             self.q_table[state, action] = old_value + self.alpha * (reward + self.gamma * next_value - old_value)
 
@@ -152,36 +136,11 @@ class Sarsa(AgenteTabular):
         return rewards, timesteps
 
 
-class ExpectedSarsa(AgenteTabular):
-    """Alvo é o valor esperado do próximo estado sob a política ε-greedy atual."""
-
-    def run_episode(self, state):
-        rewards, timesteps, done = 0, 0, False
-        n_actions = self.env.action_space.n
-        while not done:
-            action = self.select_action(state)
-            next_state, reward, done, _, _ = self.env.step(action)
-            self.visits[state, action] += 1
-
-            q_next = self.q_table[next_state]
-            probs = np.full(n_actions, self.epsilon / n_actions)
-            probs[np.argmax(q_next)] += 1 - self.epsilon
-            expected = probs @ q_next * (not done)
-            old_value = self.q_table[state, action]
-            self.q_table[state, action] = old_value + self.alpha * (reward + self.gamma * expected - old_value)
-
-            state = next_state
-            timesteps += 1
-            rewards += reward
-        return rewards, timesteps
-
-
 def avaliar_q_table(q_table, n_eval=100, max_steps=200, **env_kwargs):
-    """Testa uma Q-table usando só a política gulosa (sem exploração).
+    """Testa uma Q-table sem ações aleatórias, sempre escolhendo a melhor ação.
 
-    O episódio ep sempre usa seed=ep, então Q-tables diferentes são testadas
-    nos mesmos episódios. Episódios que passam de max_steps são contados em
-    'Não terminou'.
+    O episódio número ep usa seed=ep, então todas as Q-tables são testadas nos
+    mesmos episódios. Episódios que passam de max_steps contam em 'Não terminou'.
     """
     env = criar_env(**env_kwargs)
     passos, rewards, pens, nao_terminou = [], [], [], 0
@@ -207,7 +166,7 @@ def avaliar_q_table(q_table, n_eval=100, max_steps=200, **env_kwargs):
 
 
 def avaliar(pasta, prefixo, n_eval=100, max_steps=200, n_runs=5, **env_kwargs):
-    """Avalia as Q-tables salvas em pasta (uma por execução) com avaliar_q_table."""
+    """Testa as 5 Q-tables salvas em pasta e monta a tabela com a média no fim."""
     linhas = []
     for run in range(1, n_runs + 1):
         q_table = np.loadtxt(f'{pasta}/q-table-taxi-driver-{prefixo}-run{run}.csv', delimiter=',')
