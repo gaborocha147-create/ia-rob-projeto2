@@ -34,7 +34,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Depois rode os notebooks nesta ordem: `deterministico.ipynb`, `naodeterministico.ipynb` (usa as Q-tables do determinístico no Item 4) e `experimentos.ipynb`. Todas as execuções usam seed, então os resultados se repetem.
+Depois abra os notebooks no VS Code (ou no Jupyter) e rode nesta ordem: `deterministico.ipynb`, `naodeterministico.ipynb` (usa as Q-tables do determinístico no Item 4) e `experimentos.ipynb`. Todas as execuções usam seed, então os resultados se repetem.
 
 ## Parâmetros
 
@@ -50,6 +50,8 @@ Depois rode os notebooks nesta ordem: `deterministico.ipynb`, `naodeterministico
 | Com chuva | Com chuva | Sarsa | 26,81 | −5,89 | 0,4 |
 | Sem chuva | Com chuva | Q-learning | 30,14 | −9,60 | 2,2 |
 | Sem chuva | Com chuva | Sarsa | 29,06 | −8,39 | 1,6 |
+
+"Não terminou" é a média, por execução, de episódios de teste (em 100) que passaram do limite de 200 passos.
 
 ![Curvas de aprendizado sem chuva](results_comparacao_curvas.jpg)
 ![Curvas de aprendizado com chuva](results_comparacao_curvas_chuva.jpg)
