@@ -13,7 +13,7 @@ from numpy import savetxt
 
 def criar_env(**env_kwargs):
     # .env tira o limite de 200 passos: no treino o episódio só acaba na entrega
-    return gym.make("Taxi-v4", render_mode='ansi', **env_kwargs).env
+    return gym.make("Taxi-v4", **env_kwargs).env
 
 
 class Agente:
